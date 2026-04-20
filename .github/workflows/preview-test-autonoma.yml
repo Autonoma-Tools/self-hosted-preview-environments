@@ -1,0 +1,27 @@
+name: preview-test-autonoma
+
+# Reusable workflow: run an Autonoma test folder against a preview URL.
+# Requires:
+#   - repo/org variable AUTONOMA_FOLDER_ID
+#   - repo/org secret  AUTONOMA_API_KEY
+
+on:
+  workflow_call:
+    inputs:
+      preview_url:
+        description: Fully qualified URL of the preview environment
+        required: true
+        type: string
+
+jobs:
+  autonoma:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Autonoma folder
+        run: |
+          curl -fsS -X POST \
+            "https://api.prod.autonoma.app/v1/run/folder/${{ vars.AUTONOMA_FOLDER_ID }}" \
+            -H "Authorization: Bearer ${{ secrets.AUTONOMA_API_KEY }}" \
+            -H "Content-Type: application/json" \
+            -d '{"base_url": "${{ inputs.preview_url }}"}'

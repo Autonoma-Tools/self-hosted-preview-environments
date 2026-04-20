@@ -1,0 +1,82 @@
+name: preview-test-playwright
+
+# Reusable workflow: run Playwright E2E tests against a preview URL.
+#
+# Call it from another workflow with:
+#
+#   jobs:
+#     test:
+#       uses: ./.github/workflows/preview-test-playwright.yml
+#       with:
+#         preview_url: ${{ needs.deploy.outputs.url }}
+
+on:
+  workflow_call:
+    inputs:
+      preview_url:
+        description: Fully qualified URL of the preview environment
+        required: true
+        type: string
+      health_path:
+        description: Path to poll for readiness
+        required: false
+        type: string
+        default: /
+      health_timeout_seconds:
+        description: Max seconds to wait for the preview to respond
+        required: false
+        type: number
+        default: 180
+
+jobs:
+  playwright:
+    name: Playwright (${{ inputs.preview_url }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Wait for preview to be reachable
+        env:
+          URL: ${{ inputs.preview_url }}${{ inputs.health_path }}
+          TIMEOUT: ${{ inputs.health_timeout_seconds }}
+        run: |
+          echo "Polling ${URL} for up to ${TIMEOUT}s"
+          deadline=$((SECONDS + TIMEOUT))
+          until curl -fsS --max-time 5 -o /dev/null "${URL}"; do
+            if [ "${SECONDS}" -ge "${deadline}" ]; then
+              echo "Preview never became reachable within ${TIMEOUT}s" >&2
+              exit 1
+            fi
+            echo "  not ready yet, retrying in 5s..."
+            sleep 5
+          done
+          echo "Preview responded OK"
+
+      - name: Run Playwright tests
+        env:
+          BASE_URL: ${{ inputs.preview_url }}
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report
+          retention-days: 7
+          if-no-files-found: ignore

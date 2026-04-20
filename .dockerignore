@@ -1,0 +1,51 @@
+# Version control
+.git
+.gitignore
+.gitattributes
+
+# Dependencies (re-installed inside the image)
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Next.js build artifacts (rebuilt inside the image)
+.next
+out
+dist
+build
+
+# Environment files (never bake secrets into images)
+.env
+.env.*
+!.env.example
+
+# Tests and fixtures (not needed at runtime)
+tests
+__tests__
+e2e
+playwright-report
+test-results
+coverage
+
+# Docs and meta (not needed at runtime)
+README.md
+CHANGELOG.md
+LICENSE
+docs
+
+# Editor / OS noise
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# CI config (the runner doesn't need these)
+.github
+.gitlab-ci.yml
+
+# Local tooling
+.eslintcache
+.turbo

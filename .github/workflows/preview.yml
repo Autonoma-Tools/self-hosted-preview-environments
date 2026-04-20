@@ -1,0 +1,157 @@
+name: preview
+
+# End-to-end preview pipeline for every pull request:
+#   1. build  — build the app image and push to GHCR
+#   2. deploy — roll the image to Cloud Run and post the URL as a PR comment
+#   3. test   — run Autonoma against the preview URL
+#   teardown — on PR close, destroy the preview environment
+#
+# This is the canonical workflow referenced by the blog post. Swap the
+# `deploy` step for scripts/deploy-aws.sh or scripts/deploy-fly.sh to target
+# a different cloud — the build, comment, and test shape stay identical.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+
+concurrency:
+  # One in-flight run per PR. Newer pushes cancel older deployments so we
+  # don't ship a stale commit over a newer one.
+  group: preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write       # push to GHCR
+  pull-requests: write  # post the preview URL comment
+  id-token: write       # OIDC for cloud providers
+
+env:
+  IMAGE_REPO: ghcr.io/${{ github.repository }}
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # build
+  # ---------------------------------------------------------------------------
+  build:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+    outputs:
+      image: ${{ steps.meta.outputs.image }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tag
+        id: meta
+        run: |
+          IMAGE="${IMAGE_REPO}:pr-${{ github.event.pull_request.number }}"
+          echo "image=${IMAGE}" >> "${GITHUB_OUTPUT}"
+
+      - name: Build and push image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.image }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ---------------------------------------------------------------------------
+  # deploy
+  # ---------------------------------------------------------------------------
+  deploy:
+    if: github.event.action != 'closed'
+    needs: build
+    runs-on: ubuntu-latest
+    outputs:
+      url: ${{ steps.run.outputs.url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        id: run
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IMAGE: ${{ needs.build.outputs.image }}
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: us-central1
+        run: |
+          chmod +x scripts/deploy-gcp.sh
+          OUTPUT=$(./scripts/deploy-gcp.sh | tee /dev/stderr)
+          URL=$(echo "${OUTPUT}" | grep '^preview_url=' | tail -n1 | cut -d= -f2-)
+          if [ -z "${URL}" ]; then
+            echo "deploy-gcp.sh did not emit a preview_url line" >&2
+            exit 1
+          fi
+          echo "url=${URL}" >> "${GITHUB_OUTPUT}"
+
+      - name: Comment preview URL on PR
+        uses: peter-evans/create-or-update-comment@v4
+        with:
+          issue-number: ${{ github.event.pull_request.number }}
+          body: |
+            Preview deployed: ${{ steps.run.outputs.url }}
+
+            Commit: `${{ github.event.pull_request.head.sha }}`
+            Image:  `${{ needs.build.outputs.image }}`
+
+  # ---------------------------------------------------------------------------
+  # test
+  # ---------------------------------------------------------------------------
+  test:
+    if: github.event.action != 'closed'
+    needs: deploy
+    uses: ./.github/workflows/preview-test-autonoma.yml
+    with:
+      preview_url: ${{ needs.deploy.outputs.url }}
+    secrets: inherit
+
+  # ---------------------------------------------------------------------------
+  # teardown
+  # ---------------------------------------------------------------------------
+  teardown:
+    if: github.event.action == 'closed'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Destroy preview environment
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PROVIDER: gcp
+          PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
+          REGION: us-central1
+        run: |
+          chmod +x scripts/teardown.sh
+          ./scripts/teardown.sh
