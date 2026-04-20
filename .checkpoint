@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "slug": "self-hosted-preview-environments",
-  "step": "deps_written",
-  "completed_specs": ["dockerfile", "dockerignore", "deploy-aws", "deploy-gcp", "deploy-fly", "playwright-workflow", "autonoma-workflow", "teardown", "preview-workflow"],
-  "pending_specs": [],
-  "created_at": "2026-04-20T00:00:00Z",
-  "updated_at": "2026-04-20T00:00:01Z"
-}
